@@ -9,7 +9,6 @@ fn main() {
     env_logger::init();
     let target = env::var("TARGET").expect("TARGET was not set");
 
-    // Parse target features, this is required for ABI compatibility.
     let mut features = std::collections::HashSet::<String>::default();
     if let Ok(rustflags) = env::var("CARGO_CFG_TARGET_FEATURE") {
         for v in rustflags.split(',') {
@@ -17,14 +16,21 @@ fn main() {
         }
     }
 
-    let dst = cmake::Config::new("sleef")
+    let mut config = cmake::Config::new("sleef");
+    config
         .very_verbose(true)
         // no DFT libraries (should be behind a feature flag):
-        .define("BUILD_DFT", "FALSE")
+        .define("BUILD_DFT", "OFF")
         // no tests (should build and run the tests behind a feature flag):
-        .define("BUILD_TESTS", "FALSE")
-        .define("BUILD_SHARED_LIBS", "TRUE")
-        .build();
+        .define("BUILD_TESTS", "OFF")
+        .define("BUILD_SHARED_LIBS", "ON");
+
+    // clang on macOS crashes compiling SVE implementations.
+    if cfg!(all(target_arch = "aarch64", target_os = "macos")) {
+        config.define("DISABLE_SVE", "ON");
+    }
+
+    let dst = config.build();
 
     println!("cargo:rustc-link-lib=sleef");
     println!("cargo:rustc-link-search=native={}", dst.join("lib").display());
@@ -54,7 +60,7 @@ fn main() {
         .rust_target(bindgen::RustTarget::Nightly);
 
     // Blacklist vector types:
-    if target.contains("86") && (features.contains("sse") || features.contains("avx")) {
+    if cfg!(any(target_arch = "x86", target_arch = "x86_64")) && cfg!(any(target_feature = "sse", target_feature = "avx")) {
         // x86 targets: i386,i586,i686,x86,x86_64
         let vs = [
             // MMX:
@@ -84,7 +90,7 @@ fn main() {
                 bindings = bindings.clang_arg(format!("-D{}", def));
             }
         }
-    } else if target.contains("aarch") && features.contains("neon") {
+    } else if cfg!(target_arch = "aarch64") {
         let vs = [
             "int8x8_t", "uint8x8_t", "poly8x8_t", "int16x4_t", "uint16x4_t",
             "poly16x4_t", "int32x2_t", "uint32x2_t", "float32x2_t", "int64x1_t", "uint64x1_t",
@@ -96,7 +102,7 @@ fn main() {
             bindings = bindings.blacklist_type(v).opaque_type(v);
         }
 
-    } else if target.contains("powerpc64") && features.contains("vsx") {
+    } else if cfg!(all(target_arch = "powerpc64", target_feature = "vsx")) {
         let vs = [
             "vector_signed_char", "vector_unsigned_char",
             "vector_signed_short", "vector_unsigned_short", "vector_signed_int",
